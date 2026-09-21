@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ChargeWorth - when does the EV actually pay off?</title>
+<style>
+  :root { --bg:#0f1512; --panel:#15201a; --line:#274032; --text:#eff7f1; --dim:#9ab3a4; --accent:#6fd66f; --gas:#ff9a7a; --ev:#6fd6c8; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:26px 14px 44px; }
+  h1 { font-size:30px; }
+  .sub { color:var(--dim); margin:6px 0 18px; font-size:14px; text-align:center; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; width:min(660px, 94vw); margin-bottom:14px; }
+  .card h2 { font-size:15px; margin-bottom:10px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:10px; }
+  input { background:#0a120d; border:1px solid var(--line); border-radius:8px; color:var(--text); padding:8px 10px; font-size:13px; width:100%; }
+  label { color:var(--dim); font-size:11px; display:block; margin-bottom:4px; }
+  .car-gas h2 { color:var(--gas); } .car-ev h2 { color:var(--ev); }
+  #verdict { text-align:center; }
+  #verdict .big { font-size:28px; font-weight:900; color:var(--accent); }
+  #verdict .never { color:var(--gas); }
+  #verdict .why { color:var(--dim); margin-top:8px; font-size:14px; line-height:1.7; }
+  .legend { display:flex; gap:18px; justify-content:center; font-size:13px; margin-bottom:6px; }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:5px; }
+  svg { width:100%; height:auto; display:block; }
+  .axis { stroke:var(--line); stroke-width:1; }
+  .lbl { fill:var(--dim); font-size:9px; }
+  .foot { margin-top:14px; color:var(--dim); font-size:13px; }
+  a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<h1>ChargeWorth</h1>
+<div class="sub">the EV costs more on the lot, less per kilometer. run your own numbers.</div>
+
+<div class="card">
+  <div class="grid">
+    <div><label>Kilometers per year</label><input id="km" type="number" min="0" value="15000"></div>
+  </div>
+</div>
+
+<div class="card car-gas">
+  <h2>Gas car</h2>
+  <div class="grid">
+    <div><label>Price ($)</label><input id="g-price" type="number" min="0" value="28000"></div>
+    <div><label>Liters / 100km</label><input id="g-cons" type="number" min="0" step="0.1" value="7"></div>
+    <div><label>Fuel $/liter</label><input id="g-energy" type="number" min="0" step="0.01" value="1.90"></div>
+    <div><label>Service $/year</label><input id="g-service" type="number" min="0" value="900"></div>
+  </div>
+</div>
+
+<div class="card car-ev">
+  <h2>Electric car</h2>
+  <div class="grid">
+    <div><label>Price ($)</label><input id="e-price" type="number" min="0" value="39000"></div>
+    <div><label>kWh / 100km</label><input id="e-cons" type="number" min="0" step="0.1" value="16"></div>
+    <div><label>Electricity $/kWh</label><input id="e-energy" type="number" min="0" step="0.01" value="0.17"></div>
+    <div><label>Service $/year</label><input id="e-service" type="number" min="0" value="300"></div>
+  </div>
+</div>
+
+<div class="card" id="verdict">
+  <div class="big" id="big"></div>
+  <div class="why" id="why"></div>
+</div>
+
+<div class="card">
+  <div class="legend">
+    <span><span class="dot" style="background:var(--gas)"></span>gas total spend</span>
+    <span><span class="dot" style="background:var(--ev)"></span>EV total spend</span>
+  </div>
+  <div id="chart"></div>
+</div>
+
+<div class="foot"><a href="index.html">&larr; about</a></div>
+
+<script src="engine.js?v=1"></script>
+<script>
+(function () {
+  function num(id) { return parseFloat(document.getElementById(id).value) || 0; }
+  function money(x) { return '$' + Math.round(Math.abs(x)).toLocaleString(); }
+
+  function cars() {
+    return {
+      gas: { price: num('g-price'), per100km: num('g-cons'), energyPrice: num('g-energy'), annualService: num('g-service'), annualOther: 0 },
+      ev: { price: num('e-price'), per100km: num('e-cons'), energyPrice: num('e-energy'), annualService: num('e-service'), annualOther: 0 }
+    };
+  }
+
+  function update() {
+    var km = num('km');
+    var c = cars();
+    var big = document.getElementById('big');
+    var why = document.getElementById('why');
+    if (!(km > 0)) { big.textContent = 'Enter your yearly kilometers.'; why.textContent = ''; document.getElementById('chart').innerHTML = ''; return; }
+
+    var y = ChargeWorth.breakEvenYear(c.ev, c.gas, km, 30);
+    var runGas = ChargeWorth.runningCostPerYear(c.gas, km);
+    var runEv = ChargeWorth.runningCostPerYear(c.ev, km);
+    var s10 = ChargeWorth.savingsAt(c.ev, c.gas, km, 10);
+
+    if (y === null) {
+      var need = ChargeWorth.breakEvenKmPerYear(c.ev, c.gas, 8);
+      big.innerHTML = '<span class="never">Never pays off at ' + km.toLocaleString() + ' km/yr</span>';
+      why.innerHTML = 'Within 30 years the cheaper running never recovers the ' + money(c.ev.price - c.gas.price) + ' price gap.' +
+        (need ? '<br>Break-even at 8 years starts around <b>' + Math.round(need).toLocaleString() + ' km/yr</b>.' : '');
+    } else {
+      big.textContent = y === 1 ? 'EV wins from day one' : 'EV takes over in year ' + y;
+      why.innerHTML = 'Yearly running: <b style="color:var(--ev)">' + money(runEv) + ' EV</b> vs <b style="color:var(--gas)">' + money(runGas) + ' gas</b> - the EV saves ' + money(runGas - runEv) + ' every year.' +
+        (y > 1 ? '<br>The ' + money(c.ev.price - c.gas.price) + ' price gap takes ' + y + ' years of savings to close.' : '') +
+        '<br>After 10 years you are <b>' + money(s10) + '</b> ' + (s10 >= 0 ? 'ahead with the EV.' : 'behind with the EV.');
+    }
+
+    drawChart(c, km, y);
+  }
+
+  function drawChart(c, km, breakYear) {
+    var years = 15;
+    var s = ChargeWorth.series(c.ev, c.gas, km, years);
+    var W = 620, H = 260, padL = 56, padB = 24, padT = 12, padR = 10;
+    var maxV = 0;
+    s.forEach(function (p) { maxV = Math.max(maxV, p.ev, p.gas); });
+    function X(year) { return padL + (W - padL - padR) * year / years; }
+    function Y(v) { return H - padB - (H - padB - padT) * v / maxV; }
+    function line(key) {
+      return s.map(function (p) { return X(p.year).toFixed(1) + ',' + Y(p[key]).toFixed(1); }).join(' ');
+    }
+    var ticks = '';
+    for (var i = 0; i <= 4; i++) {
+      var v = maxV * i / 4;
+      ticks += '<line class="axis" x1="' + padL + '" y1="' + Y(v) + '" x2="' + (W - padR) + '" y2="' + Y(v) + '"/>' +
+        '<text class="lbl" x="4" y="' + (Y(v) + 3) + '">' + money(v) + '</text>';
+    }
+    for (var yr = 0; yr <= years; yr += 5) {
+      ticks += '<text class="lbl" x="' + (X(yr) - 6) + '" y="' + (H - 8) + '">yr ' + yr + '</text>';
+    }
+    var cross = '';
+    if (breakYear) {
+      var cv = ChargeWorth.cumulative(c.ev, km, breakYear);
+      cross = '<circle cx="' + X(breakYear) + '" cy="' + Y(cv) + '" r="5" fill="var(--accent)"/>' +
+        '<text class="lbl" x="' + Math.min(X(breakYear) + 8, W - 60) + '" y="' + (Y(cv) - 8) + '" fill="var(--accent)">year ' + breakYear + '</text>';
+    }
+    document.getElementById('chart').innerHTML =
+      '<svg viewBox="0 0 ' + W + ' ' + H + '">' + ticks +
+      '<polyline points="' + line('gas') + '" fill="none" stroke="var(--gas)" stroke-width="2.5"/>' +
+      '<polyline points="' + line('ev') + '" fill="none" stroke="var(--ev)" stroke-width="2.5"/>' +
+      cross + '</svg>';
+  }
+
+  ['km','g-price','g-cons','g-energy','g-service','e-price','e-cons','e-energy','e-service'].forEach(function (id) {
+    document.getElementById(id).addEventListener('input', update);
+  });
+
+  // test hook
+  window.__cw = {
+    set: function (vals) {
+      Object.keys(vals).forEach(function (k) { document.getElementById(k).value = vals[k]; });
+      update();
+    },
+    read: function () {
+      return {
+        big: document.getElementById('big').textContent,
+        why: document.getElementById('why').textContent,
+        hasChart: !!document.querySelector('#chart svg'),
+        hasCross: !!document.querySelector('#chart circle')
+      };
+    }
+  };
+
+  update();
+})();
+</script>
+</body>
+</html>
